@@ -88,10 +88,30 @@ class Spell:
     self.element = element
     self.level = level
     self.baseCost = baseCost
-    skillDifficultyIndex = int(baseCost/2) + int(level)
-    self.skillDifficulty = Constants.SkillPenaltyTable[skillDifficultyIndex]
-    self.levelDifficulty = Constants.LevelPenaltyTable[level]
+    self.skillDifficulty = self.getSkillDifficulty()
+    self.levelDifficulty = self.getLevelDifficulty()
     self.statusList = statusList
+    self.baseStrength = self.getBaseStrength()
+  def getSkillDifficulty(self):
+    index = int(self.baseCost/2) + int(self.level)
+    return Constants.SkillPenaltyTable[index]
+  def getLevelDifficulty(self):
+    return Constants.LevelPenaltyTable[self.level]
+  def getBaseStrength(self):
+    return int(self.level + int(self.baseCost/2) / 2)
+  def __repr__(self):
+    return f"""
+    Name: {self.name}
+    School: {self.book}
+    Realm: {self.element}
+    Level: {self.level}
+    Cost/Level: {self.baseCost}
+    Statuses: {self.statusList}
+    Weighted skill to Reliably Cast at Base Power: {int(self.skillDifficulty/7)}
+    Weighted skill to Reliably Cast at Max Power: {int(self.skillDifficulty)}
+    Caster level to Reliably Cast at Max Power: {int(self.levelDifficulty)}
+    Base Power to Overcome Resistance: {int(self.baseStrength)}
+    """
 
 class SkillSet:
   def __init__(self, skillValues: dict):
@@ -120,8 +140,19 @@ class Caster:
       for element in elementSkills:
         validateOptionArgument(element, Constants.Elements, "element")
         self.elementSkills[element] = elementSkills[element]
-  def weightedSkill(self, book: str, element: str):
-    return int((self.bookSkills[book] + 4*self.elementSkills[element])/5)
+  def __repr__(self):
+    bookSkills = "\n".join(
+      [f"      {book}: {self.bookSkills[book]}" for book in self.bookSkills])
+    elementSkills = "\n".join(
+      [f"      {element}: {self.elementSkills[element]}" for element in self.elementSkills])
+    return f"""
+    Name: {self.name}
+    Class: {self.profession}
+    Level: {self.level}
+    Caster Level: {self.casterLevel}
+    School Skills:\n{bookSkills}
+    Element Skills:\n{elementSkills}
+    """
 
 class Enemy:
   def __init__(self, 
@@ -135,7 +166,15 @@ class Enemy:
       for element in resistances.keys():
         validateOptionArgument(element, Constants.Elements, "element")
         self.resistances[element] = resistances[element]
+  def __repr__(self):
+    resistances = "\n".join([f"    {element}: {self.resistances[element]}" for element in self.resistances])
+    return f"""
+    Type/Name: {self.name}
+    Level: {self.level}
+    Resistances:\n{resistances}
+    """
 
+  
 class CastParams:
   def __init__(self, 
       powerLevel: int, 
@@ -145,50 +184,139 @@ class CastParams:
     self.effectType = effectType
     self.unidentifiedItem = unidentifiedItem
 
-def skillFailChance(spell: Spell, caster: Caster, params: CastParams):
-  castSkillDifficulty = int(spell.skillDifficulty * params.powerLevel/7)
-  weightedCasterSkill = caster.weightedSkill(spell.book, spell.element)
-  effectMultiplier = Constants.EffectTypeMultipliers[params.effectType]
-  relativeSkill = weightedCasterSkill / castSkillDifficulty
-  baseSkillFailChance = int(70 * (1 - relativeSkill))
-  itemOffset = 30*int(params.unidentifiedItem)
-  return int(baseSkillFailChance * effectMultiplier) + itemOffset
+    
+class SpellOutcomeChances:
+  def __init__(self,
+      skillFailChance: int,
+      levelFailChance: int,
+      overallFailChance: int,
+      backfireChance: int,
+      fizzleChance: int,
+      successChance: int):
+    self.skillFail = skillFailChance
+    self.levelFail = levelFailChance
+    self.overallFail = overallFailChance
+    self.backfire = backfireChance
+    self.fizzle = fizzleChance
+    self.success = successChance
+  def __repr__(self):
+    return f"""
+    Success: {self.success}%
+    Fail: {self.overallFail}%
+      By Reason:
+        Skill: {self.skillFail}%
+        Level: {self.levelFail}%
+      By Subtype:
+        Backfire: {self.backfire}%
+        Fizzle: {self.fizzle}%
+    """
 
-def levelFailChance(spell: Spell, caster: Caster, params: CastParams):
-  levelDeficit = spell.levelDifficulty - caster.casterLevel
-  baseFailChance = levelDeficit + params.powerLevel - 1
-  return int(baseFailChance*spell.level)
+  
+class SpellInstance:
+  def __init__(self,
+      caster: Caster,
+      spell: Spell,
+      params: CastParams):
+    self.caster = caster
+    self.spell = spell
+    self.params = params
+    self.weightedSkill = self.getWeightedSkill()
+    self.castSkillDifficulty = self.getCastSkillDifficulty()
+    self.skillFailChance = self.getSkillFailChance()
+    self.levelFailChance = self.getLevelFailChance()
+    self.overallFailChance = self.getOverallFailChance()
+    self.backfireChance = self.getBackfireChance()
+    self.castStrength = self.getCastStrength()
+    self.powerCastFactor = self.getPowerCastFactor()
+    self.referenceEnemyLevel = self.getReferenceEnemyLevel()
+  def getWeightedSkill(self):
+    bookSkill = self.caster.bookSkills[self.spell.book]
+    elementSkill = self.caster.elementSkills[self.spell.element]
+    return int((bookSkill + 4*elementSkill)/5)
+  def getCastSkillDifficulty(self):
+    return int(self.spell.skillDifficulty * self.params.powerLevel/7)
+  def getSkillFailChance(self):
+    effectMultiplier = Constants.EffectTypeMultipliers[self.params.effectType]
+    relativeSkill = self.weightedSkill / self.castSkillDifficulty
+    baseSkillFailChance = int(70 * (1 - relativeSkill))
+    itemOffset = 30*int(self.params.unidentifiedItem)
+    return max(int(baseSkillFailChance * effectMultiplier) + itemOffset,0)
+  def getLevelFailChance(self):
+    levelDeficit = self.spell.levelDifficulty - self.caster.casterLevel
+    baseFailChance = levelDeficit + self.params.powerLevel - 1
+    return max(int(baseFailChance*self.spell.level),0)
+  def getOverallFailChance(self):
+    return min(self.skillFailChance + self.levelFailChance, 100)
+  def getBackfireChance(self):
+    return int(self.overallFailChance / 3) if self.overallFailChance >= 15 else 0
+  def getCastStrength(self):
+    return self.spell.baseStrength + self.params.powerLevel + int(self.caster.casterLevel/2)
+  def getPowerCastFactor(self):
+    return (100 + int((1 + int(self.caster.powerCastSkill/4))/2))
+  def getReferenceEnemyLevel(self):
+    return int(self.castStrength*self.powerCastFactor/100)
+  def castOutcomeChances(self):
+    fizzle = max(self.overallFailChance - self.backfireChance,0)
+    success = 100 - self.overallFailChance
+    return SpellOutcomeChances(
+      self.skillFailChance,
+      self.levelFailChance,
+      self.overallFailChance,
+      self.backfireChance,
+      fizzle,
+      success)
+  def __repr__(self):
+    return f"""
+    Power Level: {self.params.powerLevel}
+    Source: {self.params.effectType}
+      Unidentified Item?: {self.params.unidentifiedItem}
+    Weighted Caster Skill: {self.weightedSkill}
+    Skill Difficulty at Level: {self.castSkillDifficulty}
+    """
+    
 
-def castOutcomeChances(spell: Spell, caster: Caster, params: CastParams):
-  skillFail = max(skillFailChance(spell, caster, params), 0)
-  levelFail = max(levelFailChance(spell, caster, params), 0)
-  overallFail = skillFail + levelFail
-  backfireChance = int(overallFail / 3) if overallFail >= 15 else 0
-  return {
-    "skillFail": skillFail, 
-    "levelFail": levelFail, 
-    "overallFail": overallFail, 
-    "backfire": backfireChance, 
-    "fizzle": overallFail - backfireChance, 
-    "success": 100 - overallFail}
-
-def resistChances(spell: Spell, enemy: Enemy, caster: Caster, params: CastParams):
-  spellBaseStrength = int(spell.level + int(spell.baseCost/2) / 2)
-  castStrength = spellBaseStrength + params.powerLevel + int(caster.casterLevel/2)
-  powerCastFactor = (100 + int((1 + int(caster.powerCastSkill/4))/2))
-  resistDelta = (enemy.level - int(castStrength*powerCastFactor/100))*3
-  resistPct = enemy.resistances[spell.element] + resistDelta
-  statusResist = {status: min(max(resistPct + Constants.StatusResistBonusTable[status],5),95) for status in spell.statusList}
-  return {
-    "baseResist": enemy.resistances[spell.element],
-    "baseSpellStrength": spellBaseStrength,
-    "castStrength": castStrength,
-    "powerCastFactor": powerCastFactor,
-    "resistDelta": resistDelta,
-    "resistPct": min(max(resistPct,5),95),
-    "minDmgResist": min(max(resistPct - int(resistPct/2),0),100),
-    "maxDmgResist": min(max(resistPct + int(resistPct/2),0),100),
-    "statusResist": statusResist}
+class SpellImpact:
+  def __init__(self, spellInstance: SpellInstance, targets: list[Enemy]):
+    self.spellReferenceLevel = spellInstance.referenceEnemyLevel
+    self.element = spellInstance.spell.element
+    self.targets = targets
+    self.statuses = spellInstance.spell.statusList
+    self.baseResists = [
+      enemy.resistances[self.element]
+      for enemy in self.targets]
+    self.resistPcts = [
+      self.resistPct(enemy)
+      for enemy in self.targets]
+    self.damageProfiles = [
+      SpellImpact.damageEfficiency(resistPct)
+      for resistPct in self.resistPcts]
+    self.statusProfiles = [
+      {status: SpellImpact.statusResistPct(resistPct, status)
+       for status in self.statuses}
+        for resistPct in self.resistPcts]
+  def resistPct(self, enemy):
+    resistDelta = (enemy.level - self.spellReferenceLevel)*3
+    resistPct = enemy.resistances[self.element] + resistDelta
+    return resistPct
+  def damageEfficiency(resistPct):
+    maxEfficiency = max(100 - max(resistPct - int(resistPct/2), 0), 0)
+    minEfficiency = max(100 - max(resistPct + int(resistPct/2), 0), 0)
+    return (minEfficiency, maxEfficiency)
+  def statusResistPct(resistPct, status):
+    return 100 - min(max(resistPct + Constants.StatusResistBonusTable[status],5),95)
+  def __repr__(self):
+    damageProfileString = "\n".join([
+      f"  {self.targets[i].name} {i}: {self.damageProfiles[i][0]}-{self.damageProfiles[i][1]}%"
+      for i in range(len(self.targets))])
+    statusProfileString = "\n".join([
+      f"  {self.targets[i].name} {i}: {self.statusProfiles[i]}"
+      for i in range(len(self.targets))])
+    return f"""
+    Damage Profiles:
+    {damageProfileString}
+    Status Profiles:
+    {statusProfileString}
+    """
 
 def main():
   theCaster = Caster(
@@ -208,52 +336,21 @@ def main():
   theEnemy = Enemy(
     level = 8,
     resistances = {"fire":25, "water":80, "earth":60, "air":70})
-  outcomeProbs = castOutcomeChances(theSpell, theCaster, theParams)  
-  resistProb = resistChances(theSpell, theEnemy, theCaster, theParams)
-  print(theCaster.name,"is a level",theCaster.level,theCaster.profession,"which gives them a caster level of",theCaster.casterLevel,"\n")  
-  print(theCaster.name + "'s Book skills are:")
-  for key in theCaster.bookSkills:
-    print("  ",str(key) + ":",theCaster.bookSkills[key])
-  print("")
-  print(theCaster.name + "'s Element skills are:")
-  for key in theCaster.elementSkills:
-    print("  ",str(key) + ":",theCaster.elementSkills[key])
-  print ("")
-  print("The spell being cast is",theSpell.name,"which has the following properties:")
-  print("  Book:",theSpell.book)
-  print("  Element:",theSpell.element)
-  print("  Level:",theSpell.level)
-  print("  Base Cost:",theSpell.baseCost)
-  print("  Weighted skill to Reliably Cast at Base Power:",int(theSpell.skillDifficulty/7))
-  print("  Weighted skill to Reliably Cast at Max Power:",theSpell.skillDifficulty)
-  print("  Caster Level to Reliably Cast at Base Power:",theSpell.levelDifficulty)
-  print("")
-  print("For",theSpell.element,"spells in the",theSpell.book,"book,",theCaster.name,"has a weighted skill level of",theCaster.weightedSkill(theSpell.book, theSpell.element),"\n")
-  print(theSpell.name,"is being cast at power level",theParams.powerLevel)
-  print("")  
-  print("This gives the following outcome probabilities:")
-  print("  Success:",outcomeProbs["success"],"%")
-  print("  Overall Failure:",outcomeProbs["overallFail"],"%")
-  print("    Breakdown by Reason:")
-  print("      Skill Based:",outcomeProbs["skillFail"],"%")
-  print("      Level Based:",outcomeProbs["levelFail"],"%")
-  print("    Breakdown by Outcome:")
-  print("      Backfire:",outcomeProbs["backfire"],"%")
-  print("      Fizzle:",outcomeProbs["fizzle"],"%")
-  print("")
-  print("On a success, the enemy's resistance level would be:",resistProb["resistPct"],"%, based on")
-  print("  Base Resist:",resistProb["baseResist"])
-  print("  Resist Modifier:",resistProb["resistDelta"])
-  print("    Base Spell Strength:",resistProb["baseSpellStrength"])
-  print("    Cast Power:",resistProb["castStrength"])
-  print("    Power Cast Multiplier:",resistProb["powerCastFactor"])
-  print("  Damage Reduction Range:","["+str(resistProb["minDmgResist"])+","+str(resistProb["maxDmgResist"])+"]")
-  print("  Status Resistance Chances:")
-  if not resistProb["statusResist"]: 
-    print("    N/A")
-  else:
-    for status in resistProb["statusResist"].keys():
-      print("    " +str(status)+":", resistProb["statusResist"][status])
+  theInstance = SpellInstance(theCaster, theSpell, theParams)
+  outcomeProbs = theInstance.castOutcomeChances()  
+  resistProbs = SpellImpact(theInstance, [theEnemy])
+  print("CASTER")
+  print(theCaster)
+  print("SPELL")
+  print(theSpell)
+  print("SPELL INSTANCE")
+  print(theInstance)
+  print("CASTING OUTCOMES")  
+  print(outcomeProbs)
+  print("TARGETS")
+  print(theEnemy)
+  print("EFFICIENCIES")
+  print(resistProbs)
 
 if __name__ == "__main__":
   main()
